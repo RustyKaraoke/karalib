@@ -1,0 +1,19 @@
+[package]
+name = "emk-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust implementation of the Extreme Karaoke file format"
+license = "MIT"
+repository = "https://github.com/RustyKaraoke/karalib"
+
+[dependencies]
+flate2 = { version = "1.0.34", features = ["miniz_oxide"] }
+hex = "0.4.3"
+md-5 = "0.10.5"
+num-derive = "0.4.2"
+num-traits = "0.2.19"
+rayon = "1.10.0"
+tracing = { version = "0.1.40", features = ["async-await", "max_level_debug"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing-test = "0.2.5"
+xor-utils = "0.6.0"

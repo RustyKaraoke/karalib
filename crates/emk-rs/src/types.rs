@@ -241,7 +241,7 @@ pub enum DataTypeOut {
 
 use std::{fmt, io::Read, path::Path};
 
-use crate::util::{xor, xor_cracker, EMK_MAGIC};
+use crate::util::{xor, xor_cracker_alula, xor_cracker_bruteforce, EMK_MAGIC};
 
 impl fmt::Display for DataTypeOut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -356,20 +356,18 @@ impl EmkReader {
         Self::decrypt(data, EMK_MAGIC.to_be_bytes().as_ref())
     }
 
-    /// Attempts to brute force the XOR key for the EMK file, iterating every single u64 value
-    ///
-    /// WARNING: Very slow... Try to avoid using this function
-    pub fn try_decrypt_brute_force(data: &[u8]) -> Result<(Self, Vec<u8>), String> {
-        // Try every possible u64
-        // use rayon::prelude::*;
+    // /// Attempt to crack the key using Alula's algorithm
+    // pub fn try_decrypt(data: &[u8]) -> Result<(Self, Vec<u8>), String> {
+    //     // Try every possible u64
+    //     // use rayon::prelude::*;
 
-        let key = xor_cracker(data).map_err(|e| e.to_string());
-        if let Ok(key) = key {
-            return Ok((Self::decrypt(data, &key)?, key));
-        }
+    //     let key = xor_cracker_alula(data).map_err(|e| e.to_string());
+    //     if let Ok(key) = key {
+    //         return Ok((Self::decrypt(data, &key)?, key));
+    //     }
 
-        Err("Failed to decrypt".to_string())
-    }
+    //     Err("Failed to decrypt".to_string())
+    // }
 
     fn check_magic(&mut self, magic: &[u8]) -> bool {
         let data = self.header[self.pos..self.pos + magic.len()].to_vec();

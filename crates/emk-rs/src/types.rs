@@ -33,6 +33,17 @@ impl EmkFile {
         Self::from_reader(reader)
     }
 
+    pub fn try_read_from_path(path: &Path) -> Result<(Self, Vec<u8>), String> {
+        let data = std::fs::read(path).map_err(|e| e.to_string())?;
+        let (reader, key) = EmkReader::try_decrypt(&data)?;
+        Ok((Self::from_reader(reader)?, key))
+    }
+
+    pub fn try_from_bytes(data: &[u8]) -> Result<(Self, Vec<u8>), String> {
+        let (reader, key) = EmkReader::try_decrypt(data)?;
+        Ok((Self::from_reader(reader)?, key))
+    }
+
     pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
         let reader = EmkReader::decrypt_default_key(data)?;
         Self::from_reader(reader)
@@ -40,6 +51,11 @@ impl EmkFile {
 
     pub fn from_bytes_with_key(data: &[u8], key: &[u8]) -> Result<Self, String> {
         let reader = EmkReader::decrypt(data, key)?;
+        Self::from_reader(reader)
+    }
+
+    pub fn from_bytes_decrypted(data: &[u8]) -> Result<Self, String> {
+        let reader = EmkReader::new(data.to_vec())?;
         Self::from_reader(reader)
     }
 
@@ -241,7 +257,7 @@ pub enum DataTypeOut {
 
 use std::{fmt, io::Read, path::Path};
 
-use crate::util::{xor, xor_cracker_alula, xor_cracker_bruteforce, EMK_MAGIC};
+use crate::util::{xor, xor_cracker_alula, EMK_MAGIC};
 
 impl fmt::Display for DataTypeOut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -337,8 +353,42 @@ impl EmkReader {
     pub fn decrypt(data: &[u8], key: &[u8]) -> Result<Self, String> {
         let data = xor(data, key)?;
 
-        let header_pos = u64::from_le_bytes(data[0x22..0x2a].try_into().unwrap()) as usize;
-        let header_end = u64::from_le_bytes(data[0x2a..0x32].try_into().unwrap()) as usize;
+        let header_pos = u64::from_le_bytes(
+            data[0x22..0x2a]
+                .try_into()
+                .map_err(|_| "Invalid header position range")?,
+        ) as usize;
+        let header_end = u64::from_le_bytes(
+            data[0x2a..0x32]
+                .try_into()
+                .map_err(|_| "Invalid header end range")?,
+        ) as usize;
+
+        let header = data
+            .get(header_pos..header_end)
+            .ok_or("Invalid header range")?
+            .to_vec();
+
+        Ok(Self {
+            data: data.clone(),
+            header,
+            pos: 0,
+        })
+    }
+
+    /// Takes an already decrypted EMK file, and returns the reader
+    pub fn new(data: Vec<u8>) -> Result<Self, String> {
+        let header_pos = data
+            .get(0x22..0x2a)
+            .ok_or("Invalid header position range")?
+            .try_into()
+            .map(u64::from_le_bytes)
+            .map_err(|_| "Invalid header position range")? as usize;
+        let header_end = u64::from_le_bytes(
+            data[0x2a..0x32]
+                .try_into()
+                .map_err(|_| "Invalid header end range")?,
+        ) as usize;
 
         let header = data
             .get(header_pos..header_end)
@@ -356,18 +406,18 @@ impl EmkReader {
         Self::decrypt(data, EMK_MAGIC.to_be_bytes().as_ref())
     }
 
-    // /// Attempt to crack the key using Alula's algorithm
-    // pub fn try_decrypt(data: &[u8]) -> Result<(Self, Vec<u8>), String> {
-    //     // Try every possible u64
-    //     // use rayon::prelude::*;
+    /// Attempt to crack the key using Alula's algorithm
+    pub fn try_decrypt(data: &[u8]) -> Result<(Self, Vec<u8>), String> {
+        // Try every possible u64
+        // use rayon::prelude::*;
 
-    //     let key = xor_cracker_alula(data).map_err(|e| e.to_string());
-    //     if let Ok(key) = key {
-    //         return Ok((Self::decrypt(data, &key)?, key));
-    //     }
+        let key = xor_cracker_alula(data).map_err(|e| e.to_string());
+        if let Ok(key) = key {
+            return Ok((Self::decrypt(data, &key)?, key));
+        }
 
-    //     Err("Failed to decrypt".to_string())
-    // }
+        Err("Failed to decrypt".to_string())
+    }
 
     fn check_magic(&mut self, magic: &[u8]) -> bool {
         let data = self.header[self.pos..self.pos + magic.len()].to_vec();

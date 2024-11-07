@@ -1,11 +1,11 @@
-use rayon::iter::ParallelBridge;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, info, trace};
+use tracing::{info, trace};
 use xor_utils::avg_normalized_hamming_distance;
+
 pub const EMK_MAGIC: u64 = 0xAFF24C9CE9EA9943;
 
 #[tracing::instrument(skip(data))]
@@ -31,13 +31,13 @@ pub fn xor_verify(data: &[u8], key: &[u8]) -> bool {
     // trace!("XORing data with key: {:X?}", key);
     let result = data
         .iter()
-        .take(5)
+        // .take(5)
         .enumerate()
         .map(|(i, &byte)| byte ^ key[i % key.len()])
         .collect::<Vec<u8>>();
 
     let magic = b".SFDS";
-    result.starts_with(magic)
+    result.starts_with(magic) && crate::types::EmkReader::new(result).is_ok()
 }
 
 // /// Attempts to brute-force the XOR key for the given data, iterating every single u64 value
@@ -131,18 +131,17 @@ pub fn xor_cracker_bruteforce(data: &[u8]) -> Result<Vec<u8>, &'static str> {
 ///
 /// Credits @alula on GitHub <3
 ///
-// todo: Probably needs a more reliable way...
+/// todo: Probably needs a more reliable way...
 pub fn xor_cracker_alula(data: &[u8]) -> Result<Vec<u8>, &'static str> {
     let d = avg_normalized_hamming_distance(&data.to_vec(), 16);
     info!("{d:#?}");
 
-    // sort by value (ascending)
+    // Sort by value (ascending)
     let mut d = d.into_iter().collect::<Vec<_>>();
     d.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // get closest distance
+    // Get closest distance
     let (key_length, _) = d.first().unwrap();
-    // let key_length = 8; // Based on the known key length
     let mut key = vec![0u8; *key_length];
     let mut most_common_bytes = vec![0u8; *key_length];
 
@@ -173,28 +172,26 @@ pub fn xor_cracker_alula(data: &[u8]) -> Result<Vec<u8>, &'static str> {
     // The positions to brute-force (0-based indexing)
     let brute_force_positions = [3, 5]; // 4th and 6th bytes
 
-    // Iterate over all possible combinations of the 4th and 6th bytes
-    for b4 in 0u8..=255 {
-        for b6 in 0u8..=255 {
+    // Parallelize the brute-force search using rayon
+    let result = (0u8..=255).into_par_iter().find_map_any(|b4| {
+        (0u8..=255).into_par_iter().find_map_any(|b6| {
+            let mut key = key.clone();
             key[brute_force_positions[0]] = b4;
             key[brute_force_positions[1]] = b6;
 
             // Verify the key
-            if !xor_verify(data, &key) {
-                continue;
-            }
-
-            debug!("Found possible key: {:X?}", key);
-            // Also verify with from_bytes_with_key
-            if crate::types::EmkFile::from_bytes_with_key(data, &key).is_ok() {
+            if xor_verify(data, &key)
+            // && crate::types::EmkFile::from_bytes_with_key(data, &key).is_ok()
+            {
                 info!("Found key! {:X?}", key);
-
-                return Ok(key);
+                Some(key)
+            } else {
+                None
             }
-        }
-    }
+        })
+    });
 
-    Err("No valid key found")
+    result.ok_or("No valid key found")
 }
 
 #[cfg(test)]

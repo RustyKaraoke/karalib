@@ -6,13 +6,18 @@ pub fn main() {
 
     let data = include_bytes!("../examples/000001.emk");
 
-    let emk1 = emk_rs::types::EmkFile::from_bytes(data).unwrap();
+    // let emk1 = emk_rs::types::EmkFile::from_bytes(data).unwrap();
 
     let key = emk_rs::util::xor_cracker_alula(data).unwrap();
 
-    println!("{:X?}", key);
+    // println!("{:X?}", key);
 
-    let emk = emk_rs::types::EmkFile::from_bytes_with_key(data, &key).unwrap();
+    let emk = emk_rs::util::xor(data, &key).unwrap();
+
+    // write to file
+    std::fs::write("000001.demk", &emk).unwrap();
+
+
 
     // println!("{:#?}", emk);
 }

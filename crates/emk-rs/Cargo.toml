@@ -1,10 +1,14 @@
 [package]
 name = "emk-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Pure-Rust implementation of the Extreme Karaoke file format"
 license = "MIT"
 repository = "https://github.com/RustyKaraoke/karalib"
+categories = ["multimedia", "encoding"]
+keywords = ["emk", "karaoke", "extreme-karaoke"]
+authors = ["Cappy Ishihara <cappy@cappuchino.xyz>"]
+readme = "README.md"
 
 [dependencies]
 flate2 = { version = "1.0.34", features = ["miniz_oxide"] }

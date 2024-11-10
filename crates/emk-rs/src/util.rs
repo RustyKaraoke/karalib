@@ -1,3 +1,5 @@
+use rayon::iter::IndexedParallelIterator;
+use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -5,39 +7,49 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, trace};
 use xor_utils::avg_normalized_hamming_distance;
+const MAGIC_BYTES: &[u8; 5] = b".SFDS";
 
 pub const EMK_MAGIC: u64 = 0xAFF24C9CE9EA9943;
 
 #[tracing::instrument(skip(data))]
 pub fn xor(data: &[u8], key: &[u8]) -> Result<Vec<u8>, &'static str> {
     trace!("XORing data with key: {:X?}", key);
-    let result = data
+
+    if data.len() < MAGIC_BYTES.len() {
+        return Err("Data too short");
+    }
+
+    // Verify magic bytes first
+    for i in 0..MAGIC_BYTES.len() {
+        if (data[i] ^ key[i % key.len()]) != MAGIC_BYTES[i] {
+            return Err("Invalid magic");
+        }
+    }
+
+    // Process full data only if magic bytes match
+    Ok(data
         .iter()
         .enumerate()
         .map(|(i, &byte)| byte ^ key[i % key.len()])
-        .collect::<Vec<u8>>();
-
-    let magic = b".SFDS";
-    if result.starts_with(magic) {
-        Ok(result)
-    } else {
-        Err("Invalid magic")
-    }
+        .collect())
 }
 
-// does the same thing as xor, but only takes the first 5 bytes of the data and verify
-// #[tracing::instrument(skip(data))]
 pub fn xor_verify(data: &[u8], key: &[u8]) -> bool {
-    // trace!("XORing data with key: {:X?}", key);
-    let result = data
-        .iter()
-        // .take(5)
-        .enumerate()
-        .map(|(i, &byte)| byte ^ key[i % key.len()])
-        .collect::<Vec<u8>>();
+    if data.len() < MAGIC_BYTES.len() {
+        return false;
+    }
 
-    let magic = b".SFDS";
-    result.starts_with(magic) && crate::types::EmkReader::new(result).is_ok()
+    // Check magic bytes
+    let magic_matches = (0..MAGIC_BYTES.len()).all(|i| {
+        (data[i] ^ key[i % key.len()]) == MAGIC_BYTES[i]
+    });
+
+    if !magic_matches {
+        return false;
+    }
+
+    // Verify full data structure
+    crate::types::EmkReader::decrypt(data, key).is_ok()
 }
 
 // /// Attempts to brute-force the XOR key for the given data, iterating every single u64 value
@@ -129,62 +141,59 @@ pub fn xor_cracker_bruteforce(data: &[u8]) -> Result<Vec<u8>, &'static str> {
 /// A modified XOR cracker that assumes the file contains mostly zeros,
 /// using Alula's algorithm for most bytes, but brute-forces the 4th and 6th bytes.
 ///
+/// While this is faster than brute-forcing the entire key, it's not as reliable and may fail. Untested with newer files
+/// that come with different keys.
+///
 /// Credits @alula on GitHub <3
 ///
 /// todo: Probably needs a more reliable way...
 pub fn xor_cracker_alula(data: &[u8]) -> Result<Vec<u8>, &'static str> {
+    // Get optimal key length using hamming distance
     let d = avg_normalized_hamming_distance(&data.to_vec(), 16);
-    info!("{d:#?}");
+    let (key_length, _) = d
+        .into_iter()
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap();
 
-    // Sort by value (ascending)
-    let mut d = d.into_iter().collect::<Vec<_>>();
-    d.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Pre-allocate key vector
+    let mut key = vec![0u8; key_length];
 
-    // Get closest distance
-    let (key_length, _) = d.first().unwrap();
-    let mut key = vec![0u8; *key_length];
-    let mut most_common_bytes = vec![0u8; *key_length];
+    // Process bytes in parallel using rayon
+    key.par_iter_mut().enumerate().for_each(|(i, byte)| {
+        // Get frequency of bytes at this position
+        let freq = data.iter().skip(i).step_by(key_length).fold(
+            HashMap::with_capacity(256),
+            |mut map, &b| {
+                *map.entry(b).or_insert(0) += 1;
+                map
+            },
+        );
 
-    // Compute most common bytes for each position
-    most_common_bytes
-        .iter_mut()
-        .enumerate()
-        .for_each(|(i, byte)| {
-            // Get every nth byte (where n is the key position)
-            let bytes: Vec<u8> = data.iter().skip(i).step_by(*key_length).cloned().collect();
+        // Most common byte is likely XORed with zero
+        *byte = freq
+            .into_iter()
+            .max_by_key(|&(_, count)| count)
+            .map(|(b, _)| b)
+            .unwrap_or(0);
+    });
 
-            // Most common byte is likely to be XOR'd with zero
-            *byte = bytes
-                .iter()
-                .fold(HashMap::new(), |mut map, &b| {
-                    *map.entry(b).or_insert(0) += 1;
-                    map
-                })
-                .into_iter()
-                .max_by_key(|&(_, count)| count)
-                .map(|(b, _)| b)
-                .unwrap_or(0);
-        });
+    // Try different position combinations in parallel
+    let positions: Vec<(usize, usize)> = (0..key.len())
+        .flat_map(|i| (i + 1..key.len()).map(move |j| (i, j)))
+        .collect();
 
-    // Copy the most common bytes to key
-    key.copy_from_slice(&most_common_bytes);
+    let result = positions.into_par_iter().find_map_any(|(pos1, pos2)| {
+        (0..=u16::MAX).into_par_iter().find_map_any(|n| {
+            let mut test_key = key.clone();
+            test_key[pos1] = (n & 0xFF) as u8;
+            test_key[pos2] = (n >> 8) as u8;
 
-    // The positions to brute-force (0-based indexing)
-    let brute_force_positions = [3, 5]; // 4th and 6th bytes
-
-    // Parallelize the brute-force search using rayon
-    let result = (0u8..=255).into_par_iter().find_map_any(|b4| {
-        (0u8..=255).into_par_iter().find_map_any(|b6| {
-            let mut key = key.clone();
-            key[brute_force_positions[0]] = b4;
-            key[brute_force_positions[1]] = b6;
-
-            // Verify the key
-            if xor_verify(data, &key)
-            // && crate::types::EmkFile::from_bytes_with_key(data, &key).is_ok()
-            {
-                info!("Found key! {:X?}", key);
-                Some(key)
+            if xor_verify(data, &test_key) {
+                info!(
+                    "Found key with positions [{}, {}]: {:X?}",
+                    pos1, pos2, test_key
+                );
+                Some(test_key)
             } else {
                 None
             }

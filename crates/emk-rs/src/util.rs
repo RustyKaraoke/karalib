@@ -40,9 +40,8 @@ pub fn xor_verify(data: &[u8], key: &[u8]) -> bool {
     }
 
     // Check magic bytes
-    let magic_matches = (0..MAGIC_BYTES.len()).all(|i| {
-        (data[i] ^ key[i % key.len()]) == MAGIC_BYTES[i]
-    });
+    let magic_matches =
+        (0..MAGIC_BYTES.len()).all(|i| (data[i] ^ key[i % key.len()]) == MAGIC_BYTES[i]);
 
     if !magic_matches {
         return false;
@@ -208,21 +207,19 @@ mod tests {
     use tracing_test::traced_test;
 
     static VALID_KEY: [u8; 8] = [0xAF, 0xF2, 0x4C, 0x9C, 0xE9, 0xEA, 0x99, 0x43];
+    static TEST_DATA: &[u8] = include_bytes!("../examples/000001.emk");
 
     #[traced_test]
     #[test]
     fn test_xor() {
-        let data = include_bytes!("../examples/000001.emk");
-        let key = VALID_KEY;
-        let result = super::xor(data, &key).unwrap();
-        assert_eq!(result.len(), data.len());
+        let result = super::xor(TEST_DATA, &VALID_KEY).unwrap();
+        assert_eq!(result.len(), TEST_DATA.len());
     }
 
     #[traced_test]
     #[test]
     fn test_alula_xor_cracker() {
-        let data = include_bytes!("../examples/000001.emk");
-        let key = super::xor_cracker_alula(data).unwrap();
+        let key = super::xor_cracker_alula(TEST_DATA).unwrap();
         assert_eq!(key, VALID_KEY);
     }
 }
